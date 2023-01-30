@@ -32,6 +32,14 @@ Previously I used the regexp package to split text into words, but it is slower 
 strings.Fields and strings.Trim  
 Also using strings.Fields and strings.Trim to split into words is supporting unicode characters. Needs to test more deeper.
 
+This approach is showing how to use channels. Using channels we can run all steps at the same time and also add additional jobs for some steps if these steps are taking longer than for example previous one.
+
+Here is the link to the same approach with multiple workers but without channels.
+Workers in doing all steps in our pipeline consecutively.
+
+https://github.com/Alex0M/word-sequences/tree/workers
+
+
 
 ## Run the program
 
