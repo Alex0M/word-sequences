@@ -2,10 +2,10 @@
 
 This version implemented the approach to read a file by chunks concurrently using some number of workers and then send chunks to channels (each worker has its own channel) to process them.
 
-Our pipeline for workers will have next steps:
-Worker #1: [read chunks of file] -> [procesing (can be 1,2,3,etc jobs): split chunks to word sequences] -> [calculate word sequences putting to a map #1]
-Worker #2: [read chunks of file] -> [procesing (can be 1,2,3,etc jobs): split chunks to word sequences] -> [calculate word sequences putting to a map #2]
-Worker #N: [read chunks of file] -> [procesing (can be 1,2,3,etc jobs): split chunks to word sequences] -> [calculate word sequences putting to a map #N]
+Our pipeline for workers will have next steps:  
+Worker #1: [read chunks of file] -> [procesing (can be 1,2,3,etc jobs): split chunks to word sequences] -> [calculate word sequences putting to a map #1]. 
+Worker #2: [read chunks of file] -> [procesing (can be 1,2,3,etc jobs): split chunks to word sequences] -> [calculate word sequences putting to a map #2]. 
+Worker #N: [read chunks of file] -> [procesing (can be 1,2,3,etc jobs): split chunks to word sequences] -> [calculate word sequences putting to a map #N]. 
 
 Once file is read and processed all maps will be merged (sum of all maps) into one map to print the results.
 
@@ -19,17 +19,17 @@ We want to make sure the chunk ends with a space. We don't want to cut words whe
 And we want to make sure the next chunk begins with a two-word shift back for three word sequences.
 (Formula: number of word sequences - 1). We need this words overlapping to concurrently calculate word sequences from chunks.
 
-For example three word sequences:
+For example three word sequences:  
 File: word1 word2 word3 word4 word5 word6 word7
 
-Our chunks will be:
-Chunk #1: word1 word2 word3 word4
-Chunk #2: word3 word4 word5 word6
-Chunk #3: word5 word6 word7
+Our chunks will be:  
+Chunk #1: word1 word2 word3 word4  
+Chunk #2: word3 word4 word5 word6  
+Chunk #3: word5 word6 word7  
 
 
 Previously I used the regexp package to split text into words, but it is slower than using
-strings.Fields and strings.Trim
+strings.Fields and strings.Trim  
 Also using strings.Fields and strings.Trim to split into words is supporting unicode characters. Needs to test more deeper.
 
 
