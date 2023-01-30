@@ -87,6 +87,7 @@ Go to a log directory to checl result.
 
 ## What would you do next?
 
+- Write unit tests
 - Deeper testing support unicode characters.
 - Create worker pool manager.
 - Add config file to configure workersNum, bufferSize, trimCutset, etc.
