@@ -35,23 +35,28 @@ There are functions (CalcChunkSizeForWorker and SplitToChunk) that can split a f
 Also they split each chunk into smaller chunks depending on the bufferSize specified in our config.
 This is step #1 of our pipeline to process a file.
 Our pipeline for workers will have next steps:
-Worker #1: [read chunk of file]->[procesing (can be 1,2,3,etc jobs): split to this chunk to word sequences]->[calculate word sequences putting to a map #1]
-Worker #2: [read chunk of file]->[procesing (can be 1,2,3,etc jobs): split to this chunk to word sequences]->[calculate word sequences putting to a map #2]
-Worker #N: [read chunk of file]->[procesing (can be 1,2,3,etc jobs): split to this chunk to word sequences]->[calculate word sequences putting to a map #N]
+Worker #1: [read chunk of file]->[procesing: split to this chunk to word sequences]->[calculate word sequences putting to a map #1]
+Worker #2: [read chunk of file]->[procesing: split to this chunk to word sequences]->[calculate word sequences putting to a map #2]
+Worker #N: [read chunk of file]->[procesing: split to this chunk to word sequences]->[calculate word sequences putting to a map #N]
+
+Previously I used the regexp package to split text into words, but it is slower than using
+strings.Fields and strings.Trim
 
 Once file is read and processed all maps will be merged into one map to print the results.
 */
-func ReadFromFile(f *os.File, workerChunkSizes []WorkerChunk) []chan string {
+func ReadFromFile(f *os.File, workerChunkSizes []WorkerChunk, trimCutset string, wsn int) []map[string]int {
 	workersNum := len(workerChunkSizes)
-	var out []chan string
+	var maps = make([]map[string]int, workersNum)
+	var wg sync.WaitGroup
 
+	wg.Add(workersNum)
 	for i := 0; i < workersNum; i++ {
 		chunkNum := len(workerChunkSizes[i].chunks)
-		c := make(chan string)
-		out = append(out, c)
+		var m = make(map[string]int)
 
 		go func(i int) {
-			//log.Println("Reading file: Srart Worker#", i)
+			defer wg.Done()
+			log.Println("Reading file: Srart Worker#", i)
 			for j := 0; j < chunkNum; j++ {
 				buffer := make([]byte, workerChunkSizes[i].chunks[j].bufsize)
 				offset := workerChunkSizes[i].chunks[j].offset
@@ -61,96 +66,31 @@ func ReadFromFile(f *os.File, workerChunkSizes []WorkerChunk) []chan string {
 					fmt.Println(err)
 					return
 				}
-				out[i] <- string(buffer)
-			}
 
-			//log.Println("Reading file: Stop Worker#", i)
-			close(out[i])
-		}(i)
-	}
+				sWords := strings.Fields(string(buffer))
+				var tmp []string
 
-	return out
-}
-
-/*
-Function to process chunks read by workers.
-This function takes chunks of text from the channel and splits them into words,
-then creates word sequences based on config (there are three in the current configuration) and puts them into the channel.
-
-Previously I used the regexp package to split text into words, but it is slower than using
-strings.Fields and strings.Trim
-This is step #2 of our pipeline.
-*/
-func ProcessLine(in []chan string, trimCutset string, pJobNum int, wsn int) []chan string {
-	var out []chan string
-
-	for i := 0; i < len(in); i++ {
-		c := make(chan string, 30) //Create buffered channel. We can send word sequences into the channel without a corresponding concurrent receive from the job that adds them to the map.
-		out = append(out, c)
-
-		go func(i int) {
-			//log.Println("Proccesing: Start Worker#", i)
-			var wg sync.WaitGroup
-
-			wg.Add(pJobNum) //Adding a number of jobs to process a chunk.
-			for j := 0; j < pJobNum; j++ {
-				go func(i int, j int) {
-					defer wg.Done()
-					//log.Println("Processing: Worker#", i, " Start Job#", j)
-
-					for l := range in[i] {
-						sWords := strings.Fields(l)
-						var tmp []string
-
-						for _, w := range sWords {
-							w = strings.Trim(strings.ToLower(w), trimCutset)
-							if w != "" {
-								if len(tmp) < wsn-1 {
-									tmp = append(tmp, w)
-								} else {
-									tmp = append(tmp, w)
-									key := strings.Join(tmp, " ")
-									out[i] <- key
-									tmp = tmp[1:]
-								}
-							}
+				for _, w := range sWords {
+					w = strings.Trim(strings.ToLower(w), trimCutset)
+					if w != "" {
+						if len(tmp) < wsn-1 {
+							tmp = append(tmp, w)
+						} else {
+							tmp = append(tmp, w)
+							key := strings.Join(tmp, " ")
+							m[key]++
+							tmp = tmp[1:]
 						}
 					}
+				}
 
-					//log.Println("Processing: Stop Job#", j, "Worker#", i)
-				}(i, j)
 			}
-
-			wg.Wait()
-			//log.Println("Processing: Stop Worker#", i)
-			close(out[i])
+			maps[i] = m
+			log.Println("Reading file: Stop Worker#", i)
 		}(i)
 	}
 
-	return out
-}
-
-/*
-Function to create a list of maps with word sequences. Each map has results for one worker.
-This is step #3 of our pipeline.
-*/
-func AddWsToMaps(cs []chan string) []map[string]int {
-	var maps = make([]map[string]int, len(cs))
-	var wg sync.WaitGroup
-
-	wg.Add(len(cs))
-	for i, c := range cs {
-		go func(i int, c chan string) {
-			defer wg.Done()
-			var m = make(map[string]int)
-			for w := range c {
-				m[w]++
-			}
-			maps[i] = m
-		}(i, c)
-	}
 	wg.Wait()
-
 	return maps
 }
 
@@ -261,28 +201,44 @@ func CalcChunkSizeForWorker(f *os.File, workNum int, bufSize int64, wsn int) []W
 Function to read text from os.Stdin
 Only 1 worker is used to process os.Stdin.
 */
-func readFromStdin(file *os.File) []chan string {
-	var out = []chan string{make(chan string)}
+func readFromStdin(file *os.File, trimCutset string, wsn int) []map[string]int {
+	var maps = make([]map[string]int, 1)
+	var m = make(map[string]int)
 
-	go func() {
-		reader := bufio.NewReader(file)
-		for {
-			b, err := reader.ReadBytes('\n') //reading line be line
-			if err != nil {
-				if err != io.EOF {
-					log.Panicln(err)
-				}
-				break
+	reader := bufio.NewReader(file)
+	for {
+		b, err := reader.ReadBytes('\n') //reading line be line
+		if err != nil {
+			if err != io.EOF {
+				log.Panicln(err)
 			}
+			break
+		}
 
-			if string(b) != "\n" {
-				out[0] <- string(b) //Using only 1 worker to read Stdin
+		if string(b) != "\n" {
+			sWords := strings.Fields(string(b))
+			var tmp []string
+
+			//This code can be a separate function to use it here and in ReadFromFile to follow DRY principle.
+			for _, w := range sWords {
+				w = strings.Trim(strings.ToLower(w), trimCutset)
+				if w != "" {
+					if len(tmp) < wsn-1 {
+						tmp = append(tmp, w)
+					} else {
+						tmp = append(tmp, w)
+						key := strings.Join(tmp, " ")
+						m[key]++
+						tmp = tmp[1:]
+					}
+				}
 			}
 		}
-		close(out[0])
-	}()
+	}
 
-	return out
+	maps[0] = m
+
+	return maps
 }
 
 func main() {
@@ -291,7 +247,7 @@ func main() {
 
 	//Config
 	var workersNum int
-	pJobNum := 3                                       //Number of jobs to process chunks for each worker
+	//pJobNum := 3                                       //Number of jobs to process chunks for each worker
 	var bufferSize int64 = 1 * 1024 * 1024             //a buffer size for file reading. For example 1MB
 	trimCutset := ".,:;<>'!?\"”“‘’()-_{}[]*=+$%^&@#`~" //cutset for trim
 	mcn := 100                                         //number of the most common word sequences to output.
@@ -306,14 +262,13 @@ func main() {
 	if runtime.NumCPU() <= 2 {
 		workersNum = 1
 	} else {
-		workersNum = runtime.NumCPU() - 1
+		//workersNum = runtime.NumCPU() - 1
+		workersNum = runtime.NumCPU()
 	}
 
 	//Stdin
 	if len(os.Args[1:]) == 0 {
-		c := readFromStdin(os.Stdin)
-		out := ProcessLine(c, trimCutset, pJobNum, wsn)
-		smap = append(smap, AddWsToMaps(out))
+		smap = append(smap, readFromStdin(os.Stdin, trimCutset, wsn))
 	}
 
 	/*
@@ -332,9 +287,7 @@ func main() {
 			defer f.Close()
 
 			workerChunkSizes := CalcChunkSizeForWorker(f, workersNum, bufferSize, wsn)
-			c := ReadFromFile(f, workerChunkSizes)
-			out := ProcessLine(c, trimCutset, pJobNum, wsn)
-			smap = append(smap, AddWsToMaps(out))
+			smap = append(smap, ReadFromFile(f, workerChunkSizes, trimCutset, wsn))
 		}
 	}
 
