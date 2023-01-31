@@ -1,11 +1,11 @@
 ## Version 2. Concurrency
 
-This version implemented the approach to read a file by chunks concurrently using some number of workers and then send chunks to channels (each worker has its own channel) to process them.
+This version implemented the approach to read a file by chunks concurrently using some number of workers.
 
 Our pipeline for workers will have next steps:  
-Worker #1: [read chunks of file] -> [procesing (can be 1,2,3,etc jobs): split chunks to word sequences] -> [calculate word sequences putting to a map #1]  
-Worker #2: [read chunks of file] -> [procesing (can be 1,2,3,etc jobs): split chunks to word sequences] -> [calculate word sequences putting to a map #2]  
-Worker #N: [read chunks of file] -> [procesing (can be 1,2,3,etc jobs): split chunks to word sequences] -> [calculate word sequences putting to a map #N]  
+Worker #1: [read chunks of file] -> [procesing: split chunks to word sequences] -> [calculate word sequences putting to a map #1]  
+Worker #2: [read chunks of file] -> [procesing: split chunks to word sequences] -> [calculate word sequences putting to a map #2]  
+Worker #N: [read chunks of file] -> [procesing: split chunks to word sequences] -> [calculate word sequences putting to a map #N]  
 
 Once file is read and processed all maps will be merged (sum of all maps) into one map to print the results.
 
