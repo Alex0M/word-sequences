@@ -17,12 +17,6 @@ type Chunk struct {
 	bufsize int64
 }
 
-type WorkerChunk struct {
-	offset  int64
-	bufsize int64
-	chunks  []Chunk
-}
-
 type WordSequencesCount struct {
 	words string
 	count int
@@ -31,8 +25,6 @@ type WordSequencesCount struct {
 /*
 Function to concurrently read a file by chunks using some number of workers and then send chunks to channels
 (each worker has its own channel) to process them.
-There are functions (CalcChunkSizeForWorker and SplitToChunk) that can split a file into chunks depending on the number of workers before starting the reading.
-Also they split each chunk into smaller chunks depending on the bufferSize specified in our config.
 This is step #1 of our pipeline to process a file.
 Our pipeline for workers will have next steps:
 Worker #1: [read chunk of file]->[procesing (can be 1,2,3,etc jobs): split to this chunk to word sequences]->[calculate word sequences putting to a map #1]
@@ -41,20 +33,26 @@ Worker #N: [read chunk of file]->[procesing (can be 1,2,3,etc jobs): split to th
 
 Once file is read and processed all maps will be merged into one map to print the results.
 */
-func ReadFromFile(f *os.File, workerChunkSizes []WorkerChunk) []chan string {
-	workersNum := len(workerChunkSizes)
+func ReadFromFile(f *os.File, workersNum int, chunks []Chunk) []chan string {
 	var out []chan string
 
+	lenc := len(chunks)
+	numc := (lenc + workersNum - 1) / workersNum //Calculate the number of chunks for each worker
+
 	for i := 0; i < workersNum; i++ {
-		chunkNum := len(workerChunkSizes[i].chunks)
 		c := make(chan string)
 		out = append(out, c)
+		start := i * numc
+		end := start + numc
+		if end > lenc {
+			end = lenc
+		}
 
 		go func(i int) {
-			//log.Println("Reading file: Srart Worker#", i)
-			for j := 0; j < chunkNum; j++ {
-				buffer := make([]byte, workerChunkSizes[i].chunks[j].bufsize)
-				offset := workerChunkSizes[i].chunks[j].offset
+			log.Println("Reading file: Srart Worker#", i)
+			for j := start; j < end; j++ {
+				buffer := make([]byte, chunks[j].bufsize)
+				offset := chunks[j].offset
 
 				_, err := f.ReadAt(buffer, offset)
 				if err != nil {
@@ -64,7 +62,7 @@ func ReadFromFile(f *os.File, workerChunkSizes []WorkerChunk) []chan string {
 				out[i] <- string(buffer)
 			}
 
-			//log.Println("Reading file: Stop Worker#", i)
+			log.Println("Reading file: Stop Worker#", i)
 			close(out[i])
 		}(i)
 	}
@@ -166,11 +164,11 @@ Chunk #1: word1 word2 word3 word4
 Chunk #2: word3 word4 word5 word6
 Chunk #3: word5 word6 word7
 */
-func FindChunkEnd(f *os.File, offset int64, wsn int) (startNext int64, endCurrect int64) {
+func FindChunkEnd(f *os.File, offset int64, wsn int) (startNext int64, endThis int64) {
 	f.Seek(offset, 0)
 
 	var sNext int64 = 0
-	var eCurrect int64 = 0
+	var eThis int64 = 0
 
 	reader := bufio.NewReader(f)
 	for i := 0; i < wsn; i++ {
@@ -184,10 +182,10 @@ func FindChunkEnd(f *os.File, offset int64, wsn int) (startNext int64, endCurrec
 		if i == 0 {
 			sNext = offset + int64(len(b))
 		}
-		eCurrect += int64(len(b))
+		eThis += int64(len(b))
 	}
 
-	return sNext, offset + eCurrect
+	return sNext, offset + eThis
 }
 
 /*
@@ -195,66 +193,41 @@ Function to split text into chunks.
 We need to provide start and end points and the buffer size.
 Based on the buffer size function will calculate the number of chunks and split text into this number of chunks.
 */
-func SplitToChunk(f *os.File, bufSize int64, start int64, end int64, wsn int) []Chunk {
+func SplitToChunks(f *os.File, bufSize int64, wsn int) []Chunk {
+	var start int64 = 0
 	var chankEnd int64 = 0
-	var size int64 = 0
 	var startNextChank int64 = 0
 	var chunk Chunk
-	var chunkSisez []Chunk
+	var chunkSizes []Chunk
 
-	for {
-		estEnd := start + bufSize
-		if estEnd >= end {
-			chankEnd = end
-		} else {
-			startNextChank, chankEnd = FindChunkEnd(f, estEnd, wsn)
-		}
-		size = chankEnd - start
-		chunk.bufsize = size
-		chunk.offset = start
-		chunkSisez = append(chunkSisez, chunk)
-		start = startNextChank
-
-		if chankEnd == end {
-			break
-		}
-	}
-	return chunkSisez
-}
-
-/*
-The function creates a chunk for each worker and if this chunk is greater than the buffer size for file reading
-(buffer Size in config) it splits this chunk into smaller chunks ≈ buffer size.
-The result will be a list of chunks with a start point (a byte in a file) and with the number of bytes to read for each worker.
-*/
-func CalcChunkSizeForWorker(f *os.File, workNum int, bufSize int64, wsn int) []WorkerChunk {
 	finfo, err := f.Stat()
 	if err != nil {
 		log.Panicln(err)
 	}
 
 	fileSize := finfo.Size()
-	if fileSize <= bufSize {
-		workNum = 1
+	if fileSize < bufSize {
+		bufSize = fileSize
 	}
 
-	workerChunkSizes := make([]WorkerChunk, workNum)
-	estWrkReadSize := fileSize / int64(workNum)
-
-	wchunks := SplitToChunk(f, estWrkReadSize, 0, fileSize, wsn)
-
-	for i, chunk := range wchunks {
-		workerChunkSizes[i].offset = chunk.offset
-		workerChunkSizes[i].bufsize = chunk.bufsize
-		if workerChunkSizes[i].bufsize > bufSize {
-			workerChunkSizes[i].chunks = SplitToChunk(f, bufSize, workerChunkSizes[i].offset, workerChunkSizes[i].offset+workerChunkSizes[i].bufsize, wsn)
+	for {
+		estEnd := start + bufSize
+		if estEnd >= fileSize {
+			chankEnd = fileSize
 		} else {
+			startNextChank, chankEnd = FindChunkEnd(f, estEnd, wsn)
+		}
+		chunk.bufsize = chankEnd - start
+		chunk.offset = start
+		chunkSizes = append(chunkSizes, chunk)
+		start = startNextChank
 
-			workerChunkSizes[i].chunks = append(workerChunkSizes[i].chunks, (Chunk{offset: workerChunkSizes[i].offset, bufsize: workerChunkSizes[i].bufsize}))
+		if chankEnd == fileSize {
+			break
 		}
 	}
 
-	return workerChunkSizes
+	return chunkSizes
 }
 
 /*
@@ -303,6 +276,7 @@ func main() {
 	   (split files to chunk and read and process them at the same time).
 
 	*/
+
 	if runtime.NumCPU() <= 2 {
 		workersNum = 1
 	} else {
@@ -331,8 +305,13 @@ func main() {
 			}
 			defer f.Close()
 
-			workerChunkSizes := CalcChunkSizeForWorker(f, workersNum, bufferSize, wsn)
-			c := ReadFromFile(f, workerChunkSizes)
+			chunks := SplitToChunks(f, bufferSize, wsn)
+
+			if len(chunks) < workersNum {
+				workersNum = len(chunks)
+			}
+
+			c := ReadFromFile(f, workersNum, chunks)
 			out := ProcessLine(c, trimCutset, pJobNum, wsn)
 			smap = append(smap, AddWsToMaps(out))
 		}
@@ -349,6 +328,7 @@ func main() {
 
 	//Add info from map to dict
 	wsc := make([]WordSequencesCount, 0, len(mres))
+
 	for k, v := range mres {
 		wsc = append(wsc, WordSequencesCount{words: k, count: v})
 	}
