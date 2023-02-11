@@ -1,4 +1,4 @@
-## Version 2. Concurrency
+## Version 0.2.1 Concurrency
 
 This version implemented the approach to read a file by chunks concurrently using some number of workers and then send chunks to channels (each worker has its own channel) to process them.
 
@@ -9,9 +9,8 @@ Worker #N: [read chunks of file] -> [procesing (can be 1,2,3,etc jobs): split ch
 
 Once file is read and processed all maps will be merged (sum of all maps) into one map to print the results.
 
-There are new functions (CalcChunkSizeForWorker and SplitToChunk) have beed added.
-These functions can split a file into chunks depending on the number of workers before starting the reading.
-They aslo split each chunk into smaller chunks depending on the bufferSize specified in our config.
+There is new function SplitToChunk have beed added.
+This function can split a file into chunks depending on the bufferSize before starting the reading.
 
 Also was added function FindChunkEnd.
 This function helps to find the end of the chunk and the start point for the next one.
